@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../schema/update.schema.json
+# Example system update config
+# fields:  run     — trusted shell command(s)  (required)
+#          needs   — executables / files that must exist, else skip  (optional; inferred from run if omitted)
+#          skip_if — trusted shell condition; skip step if exits 0  (optional)
+#
+# stat.before.label = "cmd" — run before the step
+# stat.after.label  = "cmd" — run after the step
+# stat.version      = "cmd" — run before and after the step
+# label is displayed (underscores → spaces)
+# stat.version is exclusive with stat.before/stat.after
+#
+# This file is executable configuration. Keep it owned by you and not group/world-writable.
+# Use $UPDATE_TMPDIR for per-run output files parsed by later stats.
+# Ctrl-C once stops after the current update command; Ctrl-C twice force-stops it.
+# Network gate: UPDATE_NETWORK_CHECK=0 disables; UPDATE_NETWORK_ENDPOINTS=host:port,... overrides.
+
+APT:
+  apt update:
+    run: sudo apt-get -qq update
+    needs:
+      - apt-get
+    skip_if: 'pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1'
+    stat:
+      after:
+        upgradable: 'apt list --upgradable 2>/dev/null | grep -v -e ''^Listing'' -e ''^$'' | wc -l'
+
+  apt upgrade:
+    run: 'bash -o pipefail -c ''sudo apt-get -y upgrade 2>&1 | tee "$UPDATE_TMPDIR/apt-upgrade-out.txt"'''
+    needs:
+      - apt-get
+    skip_if: 'pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1'
+    stat:
+      after:
+        upgraded: 'grep -oP ''\d+(?= upgraded)'' "$UPDATE_TMPDIR/apt-upgrade-out.txt" || echo 0'
+        held_back: 'grep -oP ''\d+(?= not upgraded)'' "$UPDATE_TMPDIR/apt-upgrade-out.txt" || echo 0'
+
+  apt autopurge:
+    run: 'bash -o pipefail -c ''sudo apt-get -y autopurge 2>&1 | tee "$UPDATE_TMPDIR/apt-autopurge-out.txt"'''
+    needs:
+      - apt-get
+    skip_if: 'pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1'
+    stat:
+      after:
+        removed: 'grep -oP ''\d+(?= to remove)'' "$UPDATE_TMPDIR/apt-autopurge-out.txt" || echo 0'
+
+  apt clean:
+    run: sudo apt-get -qq clean
+    needs:
+      - apt-get
+    skip_if: 'pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1'
+
+Flatpak:
+  flatpak update:
+    run: 'bash -o pipefail -c ''flatpak update -y --noninteractive 2>&1 | tee "$UPDATE_TMPDIR/flatpak-update-out.txt"'''
+    needs:
+      - flatpak
+    skip_if: 'pgrep -x flatpak >/dev/null 2>&1'
+    stat:
+      after:
+        updated: 'grep -c ''Updating'' "$UPDATE_TMPDIR/flatpak-update-out.txt" || echo 0'
+        total: 'flatpak list --app 2>/dev/null | wc -l'
+
+AppImages:
+  gearlever update:
+    run: 'bash -o pipefail -c ''flatpak run it.mijorus.gearlever --update --all -y 2>&1 | tee "$UPDATE_TMPDIR/gearlever-update-out.txt"'''
+    needs:
+      - flatpak
+    skip_if: '! flatpak info it.mijorus.gearlever >/dev/null 2>&1 || pgrep -x gearlever >/dev/null 2>&1'
+    stat:
+      after:
+        updated: 'grep -c '' updated successfully$'' "$UPDATE_TMPDIR/gearlever-update-out.txt" || echo 0'
+        total: 'flatpak run it.mijorus.gearlever --list-installed 2>/dev/null | wc -l'
+
+Python:
+  pyenv update:
+    run: pyenv update
+    needs:
+      - pyenv
+    skip_if: 'pgrep -x pyenv >/dev/null 2>&1'
+    stat:
+      version: 'pyenv --version 2>/dev/null | grep -oP ''\d+\.\d+\.\d+'' | head -1'
+
+  pip upgrade:
+    run: pip install --upgrade pip --quiet
+    needs:
+      - pip
+    skip_if: 'pgrep -x pip >/dev/null 2>&1 || pgrep -x pip3 >/dev/null 2>&1'
+    stat:
+      version: 'pip --version 2>/dev/null | grep -oP ''\d+\.\d+\.\d+'' | head -1'
+
+  uv self update:
+    run: uv self update
+    needs:
+      - uv
+    skip_if: 'pgrep -x uv >/dev/null 2>&1'
+    stat:
+      version: 'uv --version 2>/dev/null | grep -oP ''\d+\.\d+\.\d+'''
+
+Node:
+  nvm upgrade LTS:
+    run: 'bash -c ''source ~/.nvm/nvm.sh && nvm install --lts'''
+    needs:
+      - ~/.nvm/nvm.sh
+    skip_if: 'pgrep -x node >/dev/null 2>&1 || pgrep -x npm >/dev/null 2>&1'
+    stat:
+      version: 'bash -c ''source ~/.nvm/nvm.sh && node --version'' | grep -oP ''\d+\.\d+\.\d+'''
+
+  npm update -g:
+    run: 'bash -o pipefail -c ''source ~/.nvm/nvm.sh && npm update -g 2>&1 | tee "$UPDATE_TMPDIR/npm-update-out.txt"'''
+    needs:
+      - ~/.nvm/nvm.sh
+    skip_if: 'pgrep -x npm >/dev/null 2>&1 || pgrep -x npx >/dev/null 2>&1'
+    stat:
+      after:
+        changed: 'grep -oP ''\d+(?= package)'' "$UPDATE_TMPDIR/npm-update-out.txt" || echo 0'
+
+Rust:
+  rustup update:
+    run: rustup update --no-self-update
+    needs:
+      - rustup
+    skip_if: 'pgrep -x rustup >/dev/null 2>&1 || pgrep -x cargo >/dev/null 2>&1 || pgrep -x rustc >/dev/null 2>&1'
+    stat:
+      version: 'rustup --version 2>/dev/null | grep -oP ''\d+\.\d+\.\d+'''
+
+  cargo update:
+    run:
+      - cargo install cargo-update 2>/dev/null || true
+      - 'bash -o pipefail -c ''cargo install-update -a 2>&1 | tee "$UPDATE_TMPDIR/cargo-update-out.txt"'''
+    needs:
+      - cargo
+    skip_if: 'pgrep -x cargo >/dev/null 2>&1 || pgrep -x rustc >/dev/null 2>&1'
+    stat:
+      after:
+        updated: 'grep -c ''Updating'' "$UPDATE_TMPDIR/cargo-update-out.txt" || echo 0'
+        total: 'cargo install --list 2>/dev/null | { grep -c '':'' || true; }'
+
+CLI Tools:
+  upgrade_oh_my_bash:
+    run: 'bash -lc ''export OSH="$HOME/.oh-my-bash"; source "$OSH/tools/upgrade.sh"'''
+    needs:
+      - ~/.oh-my-bash
+      - git
+
+  tldr --update:
+    run: tldr --update
+    needs:
+      - tldr
+    skip_if: 'pgrep -x tldr >/dev/null 2>&1'
+
+  opencode upgrade:
+    run: opencode upgrade
+    needs:
+      - opencode
+    skip_if: 'pgrep -x opencode >/dev/null 2>&1'
+    stat:
+      version: 'opencode --version 2>/dev/null | grep -oP ''\d+\.\d+\.\d+'''

@@ -1,0 +1,4 @@
+PyYAML
+rich
+textual
+plotext

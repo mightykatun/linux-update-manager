@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/mightykatun/linux-update-manager/main/schema/update.schema.json",
+  "title": "update.yaml",
+  "description": "Configuration schema for the personal update CLI.",
+  "type": "object",
+  "minProperties": 1,
+  "additionalProperties": {
+    "$ref": "#/$defs/section"
+  },
+  "$defs": {
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Trusted shell command run through the updater shell. Use $UPDATE_TMPDIR for per-run scratch output."
+    },
+    "commandList": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/command"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/command"
+          }
+        }
+      ]
+    },
+    "need": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Executable name or filesystem path that must exist before the step runs."
+    },
+    "needList": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/need"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/need"
+          }
+        }
+      ]
+    },
+    "statMap": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/command"
+      },
+      "description": "Map of display labels to stat commands. Underscores in labels are displayed as spaces."
+    },
+    "stat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/statMap"
+        },
+        "after": {
+          "$ref": "#/$defs/statMap"
+        },
+        "version": {
+          "$ref": "#/$defs/command"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": ["version", "before"]
+          },
+          {
+            "required": ["version", "after"]
+          }
+        ]
+      },
+      "description": "Optional stat configuration. version is exclusive with before/after."
+    },
+    "step": {
+      "type": "object",
+      "required": ["run"],
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/commandList"
+        },
+        "needs": {
+          "$ref": "#/$defs/needList"
+        },
+        "skip_if": {
+          "type": "string",
+          "description": "Trusted shell condition. The step is skipped when this command exits 0."
+        },
+        "stat": {
+          "$ref": "#/$defs/stat"
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/step"
+      },
+      "description": "A named group of update steps. Empty sections are allowed."
+    }
+  }
+}
