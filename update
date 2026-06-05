@@ -2091,17 +2091,16 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
             total = total_elapsed(runs_for_range)
             avg = total / len(runs_for_range)
             run_counts = run_status_counts(runs_for_range)
-            step_counts = step_status_counts(runs_for_range)
             steps = aggregate_step_stats(runs_for_range)
             latest = runs_for_range[-1]
             slowest_run = max(runs_for_range, key=lambda run: run.elapsed)
             slowest = steps[0] if steps else None
             left = [("Runs", str(len(runs_for_range)), "white"), ("Active days", str(active_day_count(runs_for_range)), "white"), ("Total time", format_stats_duration(total), "white"), ("Average run", format_stats_duration(avg), "white"), ("Latest", f"{latest.status} {format_stats_duration(latest.elapsed)}", stats_status_style(latest.status))]
-            right = [("Completed", str(run_counts.get("completed", 0)), stats_status_style("completed")), ("Interrupted", str(run_counts.get("interrupted", 0)), stats_status_style("interrupted")), ("Failed", str(run_counts.get("failed", 0)), stats_status_style("failed")), ("Steps ok/skip/fail", f"{step_counts['ok']}/{step_counts['skip']}/{step_counts['fail']}", "white"), ("Slowest run", format_stats_duration(slowest_run.elapsed), "white")]
-            panels = [self.heatmap(), self.panel(self.metric_table(left, right), "Summary")]
+            right = [("Completed", str(run_counts.get("completed", 0)), stats_status_style("completed")), ("Interrupted", str(run_counts.get("interrupted", 0)), stats_status_style("interrupted")), ("Failed", str(run_counts.get("failed", 0)), stats_status_style("failed"))]
             if slowest:
-                panels.append(self.panel(self.metric("Slowest avg step", f"{slowest.section}/{slowest.name} {format_stats_duration(step_average(slowest))}", STATS_ACCENT), "Highlight"))
-            return Group(*panels)
+                right.append(("Slowest avg step", f"{slowest.section}/{slowest.name} {format_stats_duration(step_average(slowest))}", STATS_ACCENT))
+            right.append(("Slowest run", format_stats_duration(slowest_run.elapsed), "white"))
+            return Group(self.heatmap(), self.panel(self.metric_table(left, right), "Summary"))
 
         def steps(self, runs_for_range: list[StatsRun]):
             steps = [step for step in aggregate_step_stats(runs_for_range) if step.timed]
