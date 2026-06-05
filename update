@@ -1700,6 +1700,38 @@ def heatmap_counts(runs: list[StatsRun]) -> dict[object, int]:
         counts[day] = counts.get(day, 0) + 1
     return counts
 
+def stats_heatmap_column_widths(width: int, weeks: int, label_width: int = 6) -> list[int]:
+    """Return per-week cell widths that fill the available calendar width."""
+    weeks = max(1, weeks)
+    available = max(weeks * 2, width - label_width)
+    base = max(2, available // weeks)
+    widths = [base] * weeks
+    for idx in range(available - (base * weeks)):
+        widths[idx] += 1
+    return widths
+
+def stats_heatmap_month_spans(start, weeks: int, column_widths: list[int]) -> list[tuple[str, int]]:
+    """Return month labels with their rendered widths across calendar weeks."""
+    spans: list[tuple[str, int]] = []
+    current = None
+    current_width = 0
+    for week in range(weeks):
+        day = start + timedelta(days=week * 7)
+        month = (day.year, day.month, day.strftime("%b"))
+        width = column_widths[week]
+        if current is None:
+            current = month
+            current_width = width
+        elif month[:2] == current[:2]:
+            current_width += width
+        else:
+            spans.append((current[2], current_width))
+            current = month
+            current_width = width
+    if current is not None:
+        spans.append((current[2], current_width))
+    return spans
+
 def plotext_runs_chart(runs: list[StatsRun], width: int, height: int) -> str:
     """Return a plotext bar chart for run elapsed time."""
     import plotext as plt
@@ -1858,21 +1890,21 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
             max_weeks = max(1, (available_width - 6) // 2)
             weeks = max_weeks
             start = end - timedelta(days=(weeks * 7) - 1)
+            column_widths = stats_heatmap_column_widths(available_width, weeks)
             max_count = max(counts.values(), default=0)
             out = Text()
             out.append("      ", style="dim")
-            for week in range(weeks):
-                day = start + timedelta(days=week * 7)
-                label = day.strftime("%b")[:2] if day.day <= 7 or week == 0 else "  "
-                out.append(label.ljust(2), style="dim")
+            for label, width in stats_heatmap_month_spans(start, weeks, column_widths):
+                out.append(label[:width].center(width), style="dim")
             out.append("\n")
             for weekday, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
                 out.append(f"{name}   ", style="dim")
                 for week in range(weeks):
                     day = start + timedelta(days=(week * 7) + weekday)
                     char, style = self.heatmap_cell(counts.get(day, 0), max_count)
-                    out.append(char, style=style)
-                    out.append(" ")
+                    width = column_widths[week]
+                    out.append(char * (width - 1), style=style)
+                    out.append(" ", style="dim")
                 out.append("\n")
             out.append("Less  ", style="dim")
             for count in (0, 1, 2, 3, 4):
@@ -2605,6 +2637,10 @@ def _self_test_stats() -> None:
     _assert_equal(stats_status_plot_color("completed"), xterm_rgb(114), "stats plot status color")
     _assert_equal(stats_bar_text(5, 10, 4), "██", "stats bar text")
     _assert_equal(max(heatmap_counts(runs).values()), 1, "stats heatmap counts")
+    heatmap_widths = stats_heatmap_column_widths(81, 37)
+    _assert_equal(sum(heatmap_widths) + 6, 81, "stats heatmap fills width")
+    month_spans = stats_heatmap_month_spans(datetime.fromisoformat("2026-01-26T12:00:00+00:00").date(), 6, [2, 2, 2, 2, 2, 3])
+    _assert_equal(month_spans, [("Jan", 2), ("Feb", 8), ("Mar", 3)], "stats heatmap month spans")
 
 def _self_test_config_load() -> None:
     """Verify the active config parses into usable steps."""
