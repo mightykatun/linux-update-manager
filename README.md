@@ -1,7 +1,7 @@
 # Linux Update Manager
 
 <p align="center">
-  <img src="assets/main-ui.png" alt="Main UI" height="280"><img src="assets/stats-ui.png" alt="Stats UI" height="280">
+  <img src="assets/main-ui.png" alt="Main UI" height="290"><img src="assets/stats-ui.png" alt="Stats UI" height="290">
 </p>
 
 Config-driven Linux update manager with a compact terminal UI, retained command logs, run history, stats, dry runs, and schema-validated YAML configuration.
