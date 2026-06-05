@@ -256,6 +256,9 @@ STATS_ACCENT_MUTED_RGB = xterm_rgb(_HEADER_SECTION_CODE)
 STATS_ACCENT = rgb_hex(STATS_ACCENT_RGB)
 STATS_ACCENT_MUTED = rgb_hex(STATS_ACCENT_MUTED_RGB)
 STATS_HEATMAP_STYLES = tuple(rgb_hex(blend_rgb((64, 68, 76), STATS_ACCENT_RGB, amount)) for amount in (0.30, 0.50, 0.72, 1.0))
+STATS_SPARKLINE_CHARS = "▁▁▂▃▄▅"
+STATS_SPARKLINE_MISSING = "▁"
+STATS_SPARKLINE_STYLES = tuple(rgb_hex(blend_rgb(STATS_BG_RGB, STATS_ACCENT_RGB, amount)) for amount in (0.40, 0.52, 0.64, 0.76, 0.88, 1.0))
 STATUS_COLOR_CODES = {"completed": 114, "ok": 114, "interrupted": 221, "skip": 221, "failed": 203, "fail": 203}
 
 _console_lock = threading.Lock()
@@ -1635,26 +1638,38 @@ def stats_bar_text(value: float, max_value: float, width: int) -> str:
     filled = max(0, min(width, filled))
     return "█" * filled
 
-def stats_sparkline(values: list[float | None]) -> str:
-    """Return one row-local duration sparkline; underscores mean missing step data."""
-    chars = "▁▂▃▄▅▆"
-    missing = "_"
+def stats_sparkline_levels(values: list[float | None]) -> list[int | None]:
+    """Return row-local duration levels; None means missing step data."""
+    chars = STATS_SPARKLINE_CHARS
     if not values:
-        return ""
+        return []
     present = [value for value in values if value is not None]
     if not present:
-        return missing * len(values)
+        return [None for _value in values]
     high = max(present)
     scale = len(chars) - 1
     if high <= 0:
-        return "".join(chars[0] if value is not None else missing for value in values)
-    out = []
+        return [0 if value is not None else None for value in values]
+    levels: list[int | None] = []
     for value in values:
         if value is None:
-            out.append(missing)
+            levels.append(None)
         else:
-            out.append(chars[max(0, min(scale, int(((value / high) * scale) + 0.5)))])
-    return "".join(out)
+            levels.append(max(0, min(scale, int(((value / high) * scale) + 0.5))))
+    return levels
+
+def stats_sparkline(values: list[float | None]) -> str:
+    """Return one row-local duration sparkline; low blocks mean missing step data."""
+    return "".join(STATS_SPARKLINE_MISSING if level is None else STATS_SPARKLINE_CHARS[level] for level in stats_sparkline_levels(values))
+
+def stats_sparkline_text(values: list[float | None]) -> Text:
+    """Return a sparkline with brighter glyphs for taller duration levels."""
+    out = Text()
+    for level in stats_sparkline_levels(values):
+        char = STATS_SPARKLINE_MISSING if level is None else STATS_SPARKLINE_CHARS[level]
+        style = STATS_SPARKLINE_STYLES[level if level is not None else 0]
+        out.append(char, style=style)
+    return out
 
 def stats_average_present(values: list[float | None]) -> float | None:
     """Return the average of present values, or None when all are missing."""
@@ -1723,6 +1738,49 @@ def stats_smooth_values(values: list[float], window: int = 5) -> list[float]:
         start = max(0, idx - radius)
         end = min(len(values), idx + radius + 1)
         result.append(sum(values[start:end]) / (end - start))
+    return result
+
+def stats_interpolate_missing_values(values: list[float | None]) -> list[float | None]:
+    """Fill missing values only when they are bounded by real values."""
+    result = list(values)
+    idx = 0
+    while idx < len(result):
+        if result[idx] is not None:
+            idx += 1
+            continue
+        start = idx
+        while idx < len(result) and result[idx] is None:
+            idx += 1
+        end = idx
+        if start == 0 or end >= len(result):
+            continue
+        left = result[start - 1]
+        right = result[end]
+        if left is None or right is None:
+            continue
+        span = end - start + 1
+        for fill_idx in range(start, end):
+            position = fill_idx - start + 1
+            result[fill_idx] = left + ((right - left) * (position / span))
+    return result
+
+def stats_smooth_optional_values(values: list[float | None], window: int = 3) -> list[float | None]:
+    """Return a light moving average while preserving missing edges."""
+    if not values:
+        return []
+    window = max(1, window)
+    if window == 1:
+        return list(values)
+    radius = window // 2
+    result: list[float | None] = []
+    for idx, value in enumerate(values):
+        if value is None:
+            result.append(None)
+            continue
+        start = max(0, idx - radius)
+        end = min(len(values), idx + radius + 1)
+        present = [item for item in values[start:end] if item is not None]
+        result.append(sum(present) / len(present) if present else None)
     return result
 
 def stats_bucket_status(statuses: list[str]) -> str:
@@ -2069,9 +2127,10 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
             table.add_column("Durations", justify="left", width=sparkline_width)
             for idx, step in enumerate(steps[:18], start=1):
                 avg = step_average(step)
-                values = stats_resample_run_values(stats_step_run_values(runs_for_range, step.key), sparkline_width)
-                sparkline = stats_sparkline(values)
-                table.add_row(str(idx), f"{step.section}/{step.name}", format_stats_duration(avg), format_stats_duration(step.total_elapsed), f"{step.ok}/{step.skip}/{step.fail}", Text(stats_bar_text(avg, max_avg, 24), style=STATS_ACCENT), Text(sparkline, style=STATS_ACCENT_MUTED))
+                values = stats_interpolate_missing_values(stats_step_run_values(runs_for_range, step.key))
+                values = stats_smooth_optional_values(stats_resample_run_values(values, sparkline_width), 3)
+                sparkline = stats_sparkline_text(values)
+                table.add_row(str(idx), f"{step.section}/{step.name}", format_stats_duration(avg), format_stats_duration(step.total_elapsed), f"{step.ok}/{step.skip}/{step.fail}", Text(stats_bar_text(avg, max_avg, 24), style=STATS_ACCENT), sparkline)
             return self.panel(table, "Average Duration By Step")
 
         def runs_summary(self, runs_for_range: list[StatsRun]):
@@ -2754,6 +2813,8 @@ def _self_test_stats() -> None:
     _assert_equal(stats_bar_text(5, 10, 4), "██", "stats bar text")
     _assert_equal([round(value, 1) for value in stats_smooth_values([1.0, 2.0, 4.0], 3)], [1.5, 2.3, 3.0], "stats smooth values")
     _assert_equal(stats_smooth_values([1.0, 2.0], 1), [1.0, 2.0], "stats smooth passthrough")
+    _assert_equal([round(value or 0, 1) if value is not None else None for value in stats_interpolate_missing_values([None, 4.0, None, 8.0, None])], [None, 4.0, 6.0, 8.0, None], "stats bounded interpolation")
+    _assert_equal([round(value or 0, 1) if value is not None else None for value in stats_smooth_optional_values([None, 4.0, 6.0, 8.0, None], 3)], [None, 5.0, 6.0, 7.0, None], "stats optional smoothing")
     _assert_equal(stats_bucket_status(["completed", "failed"]), "failed", "stats bucket status priority")
     _assert_equal([status for _elapsed, status in stats_run_timeline_samples(recent, 4)], ["completed", "completed", "failed", "failed"], "stats stretched timeline statuses")
     _assert_equal([status for _elapsed, status in stats_run_timeline_samples(runs, 2)], ["completed", "failed"], "stats compressed timeline statuses")
@@ -2764,11 +2825,12 @@ def _self_test_stats() -> None:
     _assert_equal([round(value or 0, 1) for value in stretched], [4.0, 5.3, 6.7, 8.0], "stats stretched run values")
     _assert_equal(stats_resample_run_values([2.0, 4.0, 8.0, None], 2), [3.0, 8.0], "stats compressed run values")
     _assert_equal(stats_resample_run_values([4.0, None, 8.0], 5), [4.0, None, None, None, 8.0], "stats missing run gaps")
-    _assert_equal(stats_sparkline(stretched), "▄▄▅▆", "stats sparkline")
+    _assert_equal(stats_sparkline(stretched), "▃▃▄▅", "stats sparkline")
     _assert_equal(stats_sparkline([1.0, 2.0, 4.0]), stats_sparkline([10.0, 20.0, 40.0]), "stats row-local sparkline scale")
-    _assert_equal(stats_sparkline([None, None, None]), "___", "stats empty sparkline")
-    _assert_equal(stats_sparkline([4.0, None, 8.0]), "▄_▆", "stats missing step sparkline")
-    _assert_equal(stats_sparkline([0.0, 1.0, 2.0, 4.0]), "▁▂▄▆", "stats zero scaled sparkline")
+    _assert_equal(stats_sparkline([None, None, None]), "▁▁▁", "stats empty sparkline")
+    _assert_equal(stats_sparkline([4.0, None, 8.0]), "▃▁▅", "stats missing step sparkline")
+    _assert_equal(stats_sparkline([0.0, 1.0, 2.0, 4.0]), "▁▁▃▅", "stats zero scaled sparkline")
+    _assert_equal(stats_sparkline_text([0.0, 1.0, 2.0, 4.0]).plain, "▁▁▃▅", "stats styled sparkline plain text")
     _assert_equal(max(heatmap_counts(runs).values()), 1, "stats heatmap counts")
     heatmap_widths = stats_heatmap_column_widths(81, 37)
     _assert_equal(sum(heatmap_widths) + 6, 81, "stats heatmap fills width")
