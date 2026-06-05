@@ -9,7 +9,7 @@ Persistent history and logs live under ~/.update. Runtime output files should
 use UPDATE_TMPDIR, a private per-run directory.
 
 Runtime Python dependencies: PyYAML and Rich. The interactive stats dashboard
-also requires Textual and plotext.
+also requires Textual.
 """
 
 import argparse, colorsys, fcntl, io, json, os, re, shlex, signal, socket, stat as statmod, sys, shutil, subprocess, tempfile, textwrap, time, threading, random, urllib.parse  # nosec B404
@@ -30,7 +30,7 @@ except ImportError as e:
     sys.exit(1)
 
 RUNTIME_DEPENDENCIES = ("PyYAML", "Rich")
-STATS_TUI_DEPENDENCIES = ("Textual", "plotext")
+STATS_TUI_DEPENDENCIES = ("Textual",)
 
 CONFIG_PATH = Path("~/.config/update.yaml").expanduser()
 STATE_DIR = Path("~/.update").expanduser()
@@ -1627,11 +1627,6 @@ def stats_status_style(status: str) -> str:
     code = STATUS_COLOR_CODES.get(status)
     return rgb_hex(xterm_rgb(code)) if code is not None else "dim"
 
-def stats_status_plot_color(status: str):
-    """Return a plotext-compatible color for a run status."""
-    code = STATUS_COLOR_CODES.get(status)
-    return xterm_rgb(code) if code is not None else "gray"
-
 def stats_bar_text(value: float, max_value: float, width: int) -> str:
     """Return a solid block bar suitable for Rich table cells."""
     width = max(1, width)
@@ -1714,20 +1709,89 @@ def stats_resample_run_values(values: list[float | None], width: int) -> list[fl
         result.append(left_value + ((right_value - left_value) * (position - left)))
     return result
 
-def stats_chart_ticks(max_value: float) -> list[float]:
-    """Return readable y-axis ticks for the runs chart."""
-    target_intervals = 5
-    raw_step = max(1.0, max_value) / target_intervals
-    magnitude = 1.0
-    while magnitude * 10 <= raw_step:
-        magnitude *= 10
-    step = magnitude * 10
-    for factor in (1, 2, 3, 4, 5, 6, 10):
-        candidate = magnitude * factor
-        if candidate >= raw_step:
-            step = candidate
-            break
-    return [idx * step for idx in range(target_intervals + 1)]
+def stats_smooth_values(values: list[float], window: int = 5) -> list[float]:
+    """Return a centered moving average with clipped edges."""
+    if not values:
+        return []
+    window = max(1, window)
+    if window == 1:
+        return list(values)
+    radius = window // 2
+    result: list[float] = []
+    for idx in range(len(values)):
+        start = max(0, idx - radius)
+        end = min(len(values), idx + radius + 1)
+        result.append(sum(values[start:end]) / (end - start))
+    return result
+
+def stats_bucket_status(statuses: list[str]) -> str:
+    """Return the most important status represented by a compressed segment."""
+    for status in ("failed", "interrupted", "completed"):
+        if status in statuses:
+            return status
+    return statuses[-1] if statuses else "completed"
+
+def stats_run_timeline_samples(runs: list[StatsRun], width: int) -> list[tuple[float, str]]:
+    """Return fixed-width run duration/status samples, oldest to newest."""
+    width = max(1, width)
+    if not runs:
+        return []
+    ordered = sorted(runs, key=lambda run: run.started_at)
+    count = len(ordered)
+    if count > width:
+        result: list[tuple[float, str]] = []
+        for idx in range(width):
+            start = (idx * count) // width
+            end = ((idx + 1) * count) // width
+            bucket = ordered[start:max(start + 1, end)]
+            elapsed = sum(run.elapsed for run in bucket) / len(bucket)
+            result.append((elapsed, stats_bucket_status([run.status for run in bucket])))
+        return result
+    if count == 1:
+        run = ordered[0]
+        return [(run.elapsed, run.status)] * width
+
+    result: list[tuple[float, str]] = []
+    span = count - 1
+    for idx in range(width):
+        position = (idx * span) / (width - 1)
+        left = int(position)
+        if position == left:
+            elapsed = ordered[left].elapsed
+        else:
+            right = min(span, left + 1)
+            elapsed = ordered[left].elapsed + ((ordered[right].elapsed - ordered[left].elapsed) * (position - left))
+        nearest = max(0, min(span, int(position + 0.5)))
+        result.append((elapsed, ordered[nearest].status))
+    return result
+
+def stats_run_timeline_chart(runs: list[StatsRun], width: int, height: int, left_pad: int = 0) -> Text:
+    """Return a single-series duration area chart colored by run outcome."""
+    samples = stats_run_timeline_samples(runs, width)
+    values = [elapsed for elapsed, _status in samples]
+    if len(values) >= 3:
+        values = stats_smooth_values(values, 3)
+    high = max(values, default=0.0)
+    height = max(1, height)
+    left_pad = max(0, left_pad)
+    max_units = height * 8
+    levels: list[int] = []
+    for value in values:
+        if high <= 0:
+            levels.append(1)
+        else:
+            levels.append(max(1, min(max_units, int(((value / high) * max_units) + 0.5))))
+    blocks = " ▁▂▃▄▅▆▇█"
+    out = Text()
+    for row_idx, row in enumerate(range(height, 0, -1)):
+        if row_idx:
+            out.append("\n")
+        if left_pad:
+            out.append(" " * left_pad)
+        for level, (_elapsed, status) in zip(levels, samples):
+            filled = max(0, min(8, level - ((row - 1) * 8)))
+            out.append(blocks[filled], style=stats_status_style(status))
+    return out
 
 def stats_plain_lines(runs: list[StatsRun]) -> list[str]:
     """Build the non-TTY stats summary."""
@@ -1807,35 +1871,9 @@ def stats_heatmap_month_spans(start, weeks: int, column_widths: list[int]) -> li
         spans.append((current[2], current_width))
     return spans
 
-def plotext_runs_chart(runs: list[StatsRun], width: int, height: int) -> str:
-    """Return a plotext bar chart for run elapsed time."""
-    import plotext as plt
-
-    plt.clear_figure()
-    plt.theme("clear")
-    plt.canvas_color(STATS_BG_RGB)
-    plt.axes_color(STATS_BG_RGB)
-    plt.ticks_color(STATS_ACCENT_MUTED_RGB)
-    plt.grid(False, False)
-    plt.frame(True)
-    plt.plot_size(max(40, width), max(8, height))
-    plt.xlim(0.5, len(runs) + 0.5)
-    max_elapsed = max((run.elapsed for run in runs), default=0.0)
-    y_ticks = stats_chart_ticks(max_elapsed)
-    plt.ylim(0, y_ticks[-1])
-    plt.yticks(y_ticks, [format_stats_duration(value) for value in y_ticks])
-    if len(runs) == 1:
-        plt.xticks([1], ["1"])
-    else:
-        x_ticks = sorted({1, (len(runs) + 1) // 2, len(runs)})
-        plt.xticks(x_ticks, [str(value) for value in x_ticks])
-    for idx, run in enumerate(runs, start=1):
-        plt.bar([idx], [run.elapsed], marker="sd", color=stats_status_plot_color(run.status), fill=True, width=0.86)
-    return plt.build()
-
 def stats_tui_missing_dependency(error: Exception) -> None:
     """Exit with the configured styled error for missing stats TUI libraries."""
-    missing = getattr(error, "name", "textual or plotext")
+    missing = getattr(error, "name", "textual")
     config_error(f"Stats require {', '.join(STATS_TUI_DEPENDENCIES)} ({missing} missing)")
 
 def run_stats_tui(runs: list[StatsRun]) -> int:
@@ -1844,7 +1882,6 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
         from textual.app import App, ComposeResult
         from textual.binding import Binding
         from textual.widgets import Static
-        __import__("plotext")
     except ImportError as e:
         stats_tui_missing_dependency(e)
 
@@ -2040,31 +2077,22 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
             return self.panel(self.metric_table(left, right), "Summary")
 
         def runs_graph_header(self, width: int):
-            title = "Run Timeline"
-            left_pad = 4
-            title_start = max(left_pad, (width - len(title)) // 2)
-            out = Text(" " * left_pad)
+            out = Text()
             out.append("█ ", style=stats_status_style("completed"))
             out.append("completed  ", style="dim")
             out.append("█ ", style=stats_status_style("interrupted"))
             out.append("interrupted  ", style="dim")
             out.append("█ ", style=stats_status_style("failed"))
             out.append("failed", style="dim")
-            if out.cell_len < title_start:
-                out.append(" " * (title_start - out.cell_len))
-                out.append(title, style=f"bold {STATS_ACCENT}")
-            else:
-                out.append("  ")
-                out.append(title, style=f"bold {STATS_ACCENT}")
             return out
 
         def runs_page(self, runs_for_range: list[StatsRun]):
             if not runs_for_range:
                 return self.panel(Text("No runs in this range", style="dim"), "Runs")
-            width = max(60, self.size.width - 6)
-            height = max(10, min(18, self.size.height - 16))
-            chart = Text.from_ansi(plotext_runs_chart(runs_for_range, width, height))
-            return Group(self.runs_graph_header(width), chart, self.runs_summary(runs_for_range))
+            width = max(20, self.size.width - 6)
+            chart_height = max(4, min(9, self.size.height - 19))
+            chart = stats_run_timeline_chart(runs_for_range, max(10, width - 4), chart_height)
+            return Group(self.panel(Group(self.runs_graph_header(width), Text(""), chart), "Run Durations"), self.runs_summary(runs_for_range))
 
         def render_dashboard(self):
             if self.size.width < STATS_MIN_COLUMNS or self.size.height < STATS_MIN_ROWS:
@@ -2714,8 +2742,13 @@ def _self_test_stats() -> None:
     _assert_equal(STATS_RANGES[0], ("All", None), "stats all range")
     _assert_equal(stats_plain_lines([]), ["No update history yet"], "stats empty plain")
     _assert_equal(stats_status_style("failed"), rgb_hex(xterm_rgb(203)), "stats status style")
-    _assert_equal(stats_status_plot_color("completed"), xterm_rgb(114), "stats plot status color")
     _assert_equal(stats_bar_text(5, 10, 4), "██", "stats bar text")
+    _assert_equal([round(value, 1) for value in stats_smooth_values([1.0, 2.0, 4.0], 3)], [1.5, 2.3, 3.0], "stats smooth values")
+    _assert_equal(stats_smooth_values([1.0, 2.0], 1), [1.0, 2.0], "stats smooth passthrough")
+    _assert_equal(stats_bucket_status(["completed", "failed"]), "failed", "stats bucket status priority")
+    _assert_equal([status for _elapsed, status in stats_run_timeline_samples(recent, 4)], ["completed", "completed", "failed", "failed"], "stats stretched timeline statuses")
+    _assert_equal([status for _elapsed, status in stats_run_timeline_samples(runs, 2)], ["completed", "failed"], "stats compressed timeline statuses")
+    _assert_equal(stats_run_timeline_chart(recent, 4, 4).plain, " ▂▆█\n████\n████\n████", "stats run timeline chart")
     _assert_equal(stats_step_run_values(list(reversed(recent)), "A/one"), [4.0, 8.0], "stats step run values")
     _assert_equal(stats_step_run_values(recent, "B/two"), [None, None], "stats missing step run values")
     stretched = stats_resample_run_values([4.0, 8.0], 4)

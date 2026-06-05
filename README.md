@@ -18,7 +18,7 @@ The update steps are defined in `~/.config/update.yaml`. Commands are trusted sh
 
 - Python 3.10 or newer.
 - Runtime Python packages: `PyYAML` and `rich`.
-- Optional stats dashboard packages: `textual` and `plotext`.
+- Optional stats dashboard package: `textual`.
 
 Install the Python dependencies with your preferred tool, for example:
 
