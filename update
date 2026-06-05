@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 
 try:
     import yaml
+    from rich import box
     from rich.console import Console, Group
     from rich.control import Control, ControlType
     from rich.panel import Panel
@@ -2050,7 +2051,15 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
                 return self.panel(Text("No timed successful steps in this range", style="dim"), "Steps")
             max_avg = max(step_average(step) for step in steps)
             sparkline_width = 31
-            table = Table(title="Average Duration By Step", title_style=STATS_ACCENT, border_style=STATS_ACCENT_MUTED, expand=True, show_lines=False)
+            table = Table(
+                box=box.MINIMAL,
+                border_style=STATS_ACCENT_MUTED,
+                expand=True,
+                show_edge=False,
+                show_lines=False,
+                pad_edge=False,
+                header_style=STATS_ACCENT,
+            )
             table.add_column("#", justify="right", style="dim", width=3)
             table.add_column("Step", overflow="fold")
             table.add_column("Avg", justify="right")
@@ -2063,7 +2072,7 @@ def run_stats_tui(runs: list[StatsRun]) -> int:
                 values = stats_resample_run_values(stats_step_run_values(runs_for_range, step.key), sparkline_width)
                 sparkline = stats_sparkline(values)
                 table.add_row(str(idx), f"{step.section}/{step.name}", format_stats_duration(avg), format_stats_duration(step.total_elapsed), f"{step.ok}/{step.skip}/{step.fail}", Text(stats_bar_text(avg, max_avg, 24), style=STATS_ACCENT), Text(sparkline, style=STATS_ACCENT_MUTED))
-            return table
+            return self.panel(table, "Average Duration By Step")
 
         def runs_summary(self, runs_for_range: list[StatsRun]):
             counts = run_status_counts(runs_for_range)
