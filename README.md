@@ -1,5 +1,10 @@
 # Linux Update Manager
 
+<p align="center">
+  <img src="assets/main-ui.png" alt="Main UI" height="360" style="border-radius: 12px;">
+  <img src="assets/stats-ui.png" alt="Stats UI" height="360" style="border-radius: 12px;">
+</p>
+
 Config-driven Linux update manager with a compact terminal UI, retained command logs, run history, stats, dry runs, and schema-validated YAML configuration.
 
 The update steps are defined in `~/.config/update.yaml`. Commands are trusted shell configuration, so keep the config owned by your user and not group/world-writable.
