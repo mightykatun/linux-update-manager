@@ -457,7 +457,7 @@ class CliArgs:
     """Parsed command-line options used by updater modes."""
 
     dry_run: bool = False
-    check: bool = False
+    config_check: bool = False
     test_config: bool = False
     list_steps: bool = False
     stats: bool = False
@@ -499,9 +499,21 @@ class StepStats:
 
 # ── Secure files and config loading ───────────────────────────────────────────
 
+def startup_error_title(message: str) -> str:
+    """Return a compact startup failure title for fatal setup errors."""
+    if message.startswith("Config not found"):
+        return "Config not found"
+    if message.startswith("Unsafe config"):
+        return "Config unsafe"
+    if message.startswith(("Invalid config", "Duplicate step", "Unknown step", "Unknown section", "No steps selected")):
+        return "Config invalid"
+    return "Startup failed"
+
 def config_error(message: str) -> None:
-    """Print a startup configuration error and exit unsuccessfully."""
-    write(RED, message, RESET, "\n")
+    """Print a startup-style fatal error and exit unsuccessfully."""
+    write(f"  {RED}✗{RESET} {GRAY}{0.0:{ELAPSED_WIDTH}.1f}s{RESET}  {RED}{startup_error_title(message)}{RESET}\n")
+    for line in message.splitlines() or [""]:
+        write(f"           {GRAY}{line}{RESET}\n")
     sys.exit(1)
 
 def ensure_private_dir(path: Path) -> None:
@@ -758,14 +770,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for updater modes and filters."""
     parser = argparse.ArgumentParser(
         description="Config-driven system updater. With no mode flag, runs selected update steps.",
-        epilog="examples: update -l | update -s | update -n --section APT | update -c | update --only 'apt update'",
+        epilog="examples: update -l | update -s | update --dry-run --section Examples | update --config-check | update --only 'simple command'",
         allow_abbrev=False,
     )
     modes = parser.add_argument_group("modes", "choose at most one")
     mode = modes.add_mutually_exclusive_group()
     mode.add_argument("-l", "--list-steps", action="store_true", help="list configured step names")
-    mode.add_argument("-n", "--dry-run", action="store_true", help="show what would run without updates")
-    mode.add_argument("-c", "--check", action="store_true", help="run quick readiness checks")
+    mode.add_argument("--dry-run", action="store_true", help="show what would run without updates")
+    mode.add_argument("--config-check", action="store_true", help="validate config and filters without probes")
     mode.add_argument("-t", "--test-config", action="store_true", help="run full config checks")
     mode.add_argument("-s", "--stats", action="store_true", help="show update history statistics")
     mode.add_argument("--self-test", action="store_true", help="run internal non-destructive self-tests")
@@ -781,7 +793,7 @@ def parse_cli_args(argv: list[str]) -> CliArgs:
     ns = build_arg_parser().parse_args(argv)
     return CliArgs(
         dry_run=ns.dry_run,
-        check=ns.check,
+        config_check=ns.config_check,
         test_config=ns.test_config,
         list_steps=ns.list_steps,
         stats=ns.stats,
@@ -2480,22 +2492,13 @@ def print_test_config(steps: list[Step], env: dict) -> int:
     report("fail" if failed else "ok", "test-config failed" if failed else "test-config passed")
     return 1 if failed else 0
 
-def report_self_test_status() -> bool:
-    """Run self-tests and return whether they passed."""
-    return run_self_tests()
-
-def print_check(steps: list[Step], env: dict) -> int:
-    """Run quick readiness checks without update commands or stats."""
-    checks = [
-        report_self_test_status(),
-        report_lock_status(fail_when_locked=True),
-        report_network_status(env, fail=True),
-        not report_static_step_problems(steps),
-        report_sudo_status(steps, env, check_auth=True),
-    ]
-    failed = not all(checks)
-    report("fail" if failed else "ok", "check failed" if failed else "check passed")
-    return 1 if failed else 0
+def print_config_check(all_steps: list[Step], selected_steps: list[Step]) -> int:
+    """Report config-only validation success without running probes."""
+    report_empty_sections()
+    report("ok", f"loaded {len(all_steps)} steps")
+    if len(selected_steps) != len(all_steps):
+        report("info", f"selected {len(selected_steps)} steps")
+    return 0
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
@@ -2752,6 +2755,8 @@ def _self_test_config_helpers() -> None:
     _assert_equal(infer_needs(["bash -c 'echo ok'", "uv self update"]), ["bash", "uv"], "multi needs")
     _assert_equal(command_uses_sudo("bash -o pipefail -c 'sudo apt-get update'"), True, "wrapped sudo")
     _assert_equal(parse_cli_args(["-s"]).stats, True, "stats short cli")
+    _assert_equal(parse_cli_args(["--dry-run"]).dry_run, True, "dry-run cli")
+    _assert_equal(parse_cli_args(["--config-check"]).config_check, True, "config-check cli")
     parsed_filters = parse_cli_args(["--only", "one", "--skip", "two", "--section", "A"])
     _assert_equal((parsed_filters.only, parsed_filters.skip, parsed_filters.section), (["one"], ["two"], ["A"]), "long filters cli")
     steps = [Step("one", ["true"], group="A"), Step("two", ["true"], group="B")]
@@ -2917,8 +2922,8 @@ def run_report_mode(args: CliArgs, all_steps: list[Step], selected_steps: list[S
         return print_dry_run(all_steps, selected_steps, args)
     if args.list_steps:
         return print_list_steps(selected_steps)
-    if args.check:
-        return print_check(selected_steps, env)
+    if args.config_check:
+        return print_config_check(all_steps, selected_steps)
     if args.test_config:
         return print_test_config(selected_steps, env)
     return None

@@ -46,14 +46,14 @@ Then edit `~/.config/update.yaml`
 
 ```sh
 update                    # run selected update steps
-update -n                 # dry run
-update -c                 # readiness check
+update --dry-run          # show what would run
+update --config-check     # validate config and filters
 update -s                 # stats
 
 # filters
-update --only "apt update"
-update --skip "cargo update"
-update --section APT
+update --only "simple command"
+update --skip "multiple commands"
+update --section Examples
 
 # testing
 update --self-test
@@ -62,6 +62,8 @@ update --self-test
 ## Config
 
 Start with `examples/update.yaml`.
+
+The config is validated automatically at startup. Use `update --config-check` when you only want to check the file and filters.
 
 The schema is in `schema/update.schema.json`. The example config links to it like this:
 
