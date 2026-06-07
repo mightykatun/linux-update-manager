@@ -46,8 +46,6 @@ Then edit `~/.config/update.yaml`
 
 ```sh
 update                    # run selected update steps
-update --dry-run          # show what would run
-update --config-check     # validate config and filters
 update -s                 # stats
 
 # filters
@@ -57,6 +55,8 @@ update --section Examples
 
 # testing
 update --self-test
+update --dry-run          # show what would run
+update --config-check     # validate config and filters
 ```
 
 ## Config
