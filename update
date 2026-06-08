@@ -1998,7 +1998,7 @@ class StatsDashboardMixin:
         self.refresh_dashboard()
 
     def on_resize(self) -> None:
-        self.refresh_dashboard()
+        self.call_after_refresh(self.refresh_dashboard)
 
     def on_key(self, event) -> None:
         if event.key == "right":
@@ -2078,7 +2078,7 @@ class StatsDashboardMixin:
         level = max(1, min(4, ((count * 4) + max_count - 1) // max_count))
         return ("░", "▒", "▓", "█")[level - 1], STATS_HEATMAP_STYLES[level - 1]
 
-    def heatmap(self):
+    def heatmap(self, content_width: int):
         if not self.history_runs:
             return self.panel(Text("No runs in history", style="dim"), "Run Count")
         counts = heatmap_counts(self.history_runs)
@@ -2086,7 +2086,7 @@ class StatsDashboardMixin:
         last_day = max(counts) if counts else today
         end = max(today, last_day)
         end = end + timedelta(days=6 - end.weekday())
-        available_width = max(20, self.size.width - 8)
+        available_width = max(20, content_width - 4)
         weeks = max(1, (available_width - 6) // 2)
         start = end - timedelta(days=(weeks * 7) - 1)
         column_widths = stats_heatmap_column_widths(available_width, weeks)
@@ -2113,9 +2113,9 @@ class StatsDashboardMixin:
         out.append(" More", style="dim")
         return self.panel(out, "Run Count")
 
-    def overview(self, runs_for_range: list[StatsRun]):
+    def overview(self, runs_for_range: list[StatsRun], content_width: int):
         if not runs_for_range:
-            return Group(self.heatmap(), self.panel(Text("No runs in this range", style="dim"), "Summary"))
+            return Group(self.heatmap(content_width), self.panel(Text("No runs in this range", style="dim"), "Summary"))
         total = total_elapsed(runs_for_range)
         avg = total / len(runs_for_range)
         run_counts = run_status_counts(runs_for_range)
@@ -2128,7 +2128,7 @@ class StatsDashboardMixin:
         if slowest:
             right.append(("Slowest avg step", f"{slowest.section}/{slowest.name} {format_stats_duration(step_average(slowest))}", STATS_ACCENT))
         right.append(("Slowest run", format_stats_duration(slowest_run.elapsed), "white"))
-        return Group(self.heatmap(), self.panel(self.metric_table(left, right), "Summary"))
+        return Group(self.heatmap(content_width), self.panel(self.metric_table(left, right), "Summary"))
 
     def steps(self, runs_for_range: list[StatsRun]):
         steps = [step for step in aggregate_step_stats(runs_for_range) if step.timed]
@@ -2181,31 +2181,41 @@ class StatsDashboardMixin:
         out.append("failed", style="dim")
         return out
 
-    def runs_page(self, runs_for_range: list[StatsRun]):
+    def runs_page(self, runs_for_range: list[StatsRun], content_width: int, content_height: int):
         if not runs_for_range:
             return self.panel(Text("No runs in this range", style="dim"), "Runs")
-        width = max(20, self.size.width - 6)
-        chart_height = max(4, min(9, self.size.height - 19))
-        chart = stats_run_timeline_chart(runs_for_range, max(10, width - 4), chart_height)
+        chart_width = max(10, content_width - 4)
+        chart_height = max(4, min(9, content_height - 17))
+        chart = stats_run_timeline_chart(runs_for_range, chart_width, chart_height)
         return Group(self.panel(Group(self.runs_graph_header(), Text(""), chart), "Run Durations"), self.runs_summary(runs_for_range))
 
-    def render_dashboard(self):
-        if self.size.width < STATS_MIN_COLUMNS or self.size.height < STATS_MIN_ROWS:
-            message = Text.assemble(("Terminal too small for stats\n", "bold yellow"), (f"Need at least {STATS_MIN_COLUMNS}x{STATS_MIN_ROWS}, current {self.size.width}x{self.size.height}.\n", "dim"), ("Press q to exit.", "dim"))
+    def render_dashboard(self, outer_width: int, outer_height: int, content_width: int, content_height: int):
+        if outer_width < STATS_MIN_COLUMNS or outer_height < STATS_MIN_ROWS:
+            message = Text.assemble(("Terminal too small for stats\n", "bold yellow"), (f"Need at least {STATS_MIN_COLUMNS}x{STATS_MIN_ROWS}, current {outer_width}x{outer_height}.\n", "dim"), ("Press q to exit.", "dim"))
             return self.panel(message, "System Update Stats")
         now = datetime.now().astimezone()
         runs_for_range = self.selected_runs(now)
         title = Text.assemble(("System Update Stats", f"bold {STATS_ACCENT}"), (f"  {now:%a %d %b %Y  %H:%M}", "dim"))
         if self.page_idx == 0:
-            page = self.overview(runs_for_range)
+            page = self.overview(runs_for_range, content_width)
         elif self.page_idx == 1:
             page = self.steps(runs_for_range)
         else:
-            page = self.runs_page(runs_for_range)
+            page = self.runs_page(runs_for_range, content_width, content_height)
         return Group(title, self.tabs(), Text(" "), page, self.footer_text())
 
+    def dashboard_dimensions(self, stats) -> tuple[int, int, int, int]:
+        """Return outer and content dimensions for stable resize rendering."""
+        outer_width = stats.size.width or self.size.width
+        outer_height = stats.size.height or self.size.height
+        content_width = stats.content_size.width or max(1, outer_width - 4)
+        content_height = stats.content_size.height or max(1, outer_height - 2)
+        return outer_width, outer_height, content_width, content_height
+
     def refresh_dashboard(self) -> None:
-        self.query_one("#stats", self.StaticWidget).update(self.render_dashboard())
+        stats = self.query_one("#stats", self.StaticWidget)
+        stats.update(self.render_dashboard(*self.dashboard_dimensions(stats)))
+        stats.refresh(layout=True)
 
 def run_stats_tui(runs: list[StatsRun]) -> int:
     """Run the Textual interactive stats dashboard."""
