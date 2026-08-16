@@ -23,6 +23,7 @@ STATS_TUI_DEPENDENCIES = ("Textual",)
 try:
     import yaml
     from rich import box
+    from rich.cells import cell_len
     from rich.console import Console, Group
     from rich.control import Control, ControlType
     from rich.panel import Panel
@@ -330,7 +331,7 @@ class Spinner:
         lines = self.render_frame(frame).split("\n")
         rendered = []
         for idx, line in enumerate(lines):
-            rendered.append(MAIN_UI.erase_line() + line)
+            rendered.append(MAIN_UI.erase_line() + fit_live_line(line))
             if idx < len(lines) - 1:
                 rendered.append("\n")
         return "".join(rendered)
@@ -1002,6 +1003,31 @@ def strip_ansi(text: str) -> str:
     """Remove terminal color/control sequences for visible-text checks."""
     return ANSI_ESCAPE_RE.sub("", text)
 
+def truncate_ansi(text: str, max_cells: int) -> str:
+    """Truncate styled text to a terminal-cell width without breaking ANSI codes."""
+    parts: list[str] = []
+    cells = 0
+    idx = 0
+    while idx < len(text):
+        match = ANSI_ESCAPE_RE.match(text, idx)
+        if match:
+            parts.append(match.group())
+            idx = match.end()
+            continue
+        char = text[idx]
+        char_cells = cell_len(char)
+        if cells + char_cells > max_cells:
+            return "".join(parts) + RESET
+        parts.append(char)
+        cells += char_cells
+        idx += 1
+    return "".join(parts)
+
+def fit_live_line(text: str, terminal_width: int | None = None) -> str:
+    """Keep a live line from reaching the terminal's auto-wrap column."""
+    width = MAIN_UI.terminal_width() if terminal_width is None else terminal_width
+    return truncate_ansi(text, max(0, width - 1))
+
 def command_label(cmd: str) -> str:
     """Return a compact label for a shell command."""
     return f"{cmd[:60]}{'…' if len(cmd) > 60 else ''}"
@@ -1176,7 +1202,7 @@ def wait_for_network(env: dict = os.environ) -> None:
     spinner = Spinner(lambda frame: waiting_network_line(frame, time.monotonic() - t0))
     try:
         if IS_TTY:
-            write(waiting_network_line(elapsed=0.0))
+            write(fit_live_line(waiting_network_line(elapsed=0.0)))
             spinner.start()
             set_active_spinner(spinner)
         else:
@@ -2561,7 +2587,10 @@ def start_step_spinner(step: Step, stats_col: int, pre_texts: list[str], t0: flo
         lines = []
         if section_heading:
             lines.append(section_heading_line(section_heading))
-        lines.extend(live_step_block(step.name, stats_col, pre_texts, progress, elapsed=0.0).split("\n"))
+        lines.extend(
+            fit_live_line(line)
+            for line in live_step_block(step.name, stats_col, pre_texts, progress, elapsed=0.0).split("\n")
+        )
         write(prefix, render_cleared_lines(lines))
         spinner.start()
         set_active_spinner(spinner)
@@ -2720,6 +2749,9 @@ def _self_test_formatting() -> None:
     _assert_equal("1 passed" in summary_status([Result("done", "ok")], 3.0, 4.0), True, "final counts")
     _assert_equal("remaining ~" in running_line("apt upgrade", 30, ["1 upgraded"]), False, "no inline ETA")
     _assert_equal(strip_ansi(stat_block(["0 upgraded", "3 held back"])), "  0 upgraded · 3 held back", "stat separator spacing")
+    fitted = fit_live_line("\033[31mAB界C\033[0m", 5)
+    _assert_equal(strip_ansi(fitted), "AB界", "live line terminal-cell truncation")
+    _assert_equal(cell_len(strip_ansi(fitted)) < 5, True, "live line avoids wrap column")
     skip_text = strip_ansi(skip_line("opencode upgrade", "skipped", 40))
     final_text = strip_ansi(final_line("✓", GREEN, "opencode upgrade", 1.0, 40, ["skipped"], []))
     _assert_equal(skip_text.index("skipped"), final_text.index("skipped"), "skip alignment")
