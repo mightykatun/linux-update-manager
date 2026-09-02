@@ -89,6 +89,10 @@ class MainTerminalUI:
         """Return a carriage-return control string."""
         return self.control_text(ControlType.CARRIAGE_RETURN)
 
+    def next_line(self) -> str:
+        """Move down one line and explicitly return to the first column."""
+        return "\n" + self.carriage_return()
+
     def move_up(self, count: int) -> str:
         """Return a previous-line control string."""
         return self.control_text((ControlType.CURSOR_UP, count), (ControlType.CURSOR_MOVE_TO_COLUMN, 0)) if count > 0 else ""
@@ -321,7 +325,7 @@ class Spinner:
         for idx in range(self.line_count):
             parts.append(MAIN_UI.erase_line())
             if idx < self.line_count - 1:
-                parts.append("\n")
+                parts.append(MAIN_UI.next_line())
         if self.line_count > 1:
             parts.append(MAIN_UI.move_up(self.line_count - 1))
         return "".join(parts)
@@ -333,7 +337,7 @@ class Spinner:
         for idx, line in enumerate(lines):
             rendered.append(MAIN_UI.erase_line() + fit_live_line(line))
             if idx < len(lines) - 1:
-                rendered.append("\n")
+                rendered.append(MAIN_UI.next_line())
         return "".join(rendered)
 
     def _loop(self):
@@ -1293,7 +1297,7 @@ def live_step_block(name: str, stats_col: int, stat_texts: list[str], progress: 
 
 def render_cleared_lines(lines: list[str]) -> str:
     """Render lines while clearing any old terminal content first."""
-    return "\n".join(MAIN_UI.erase_line() + line for line in lines)
+    return MAIN_UI.next_line().join(MAIN_UI.erase_line() + line for line in lines)
 
 def completed_progress(progress: ProgressState, result: Result) -> ProgressState:
     """Return progress state including the newly completed result."""
